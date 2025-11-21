@@ -713,7 +713,7 @@ end Behavioral;
 
 
 -- ===============================================================================
--- MÓDULO AUXILIAR 8: BASE DE TIEMPOS (Relojes y Contadores)
+-- MÓDULO 8: BASE DE TIEMPOS (Relojes y Contadores)
 -- ===============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -771,7 +771,7 @@ begin
     refresh_cnt <= cnt_ref;
 end Behavioral;
 -- ===============================================================================
--- MÓDULO AUXILIAR 9: NÚCLEO LÓGICO (Cerebro del Juego - FSM)
+-- MÓDULO 9: NÚCLEO LÓGICO (Cerebro del Juego - FSM)
 -- ===============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -939,7 +939,7 @@ begin
 end Behavioral;
 
 -- ===============================================================================
--- MÓDULO AUXILIAR 10: CONTROLADOR DE DISPLAY (Visualización)
+-- MÓDULO 10: CONTROLADOR DE DISPLAY (Visualización)
 -- ===============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
