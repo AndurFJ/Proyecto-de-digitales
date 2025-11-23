@@ -713,111 +713,86 @@ end Behavioral;
 
 
 -- ===============================================================================
--- MÓDULO 8: BASE DE TIEMPOS (Relojes y Contadores)
+-- MÓDULO 8: JUEGO ADIVINANZA (V16 - Inicio con "----")
 -- ===============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- DESCRIPCIÓN:
--- Este módulo genera dos señales temporales críticas:
--- 1. clk_1hz_enable: Un pulso que se activa una vez por segundo (para cuentas regresivas).
--- 2. refresh_cnt: Un contador rápido que sirve para dos cosas: 
---    a) Multiplexar el display de 7 segmentos.
---    b) Servir como "semilla" pseudo-aleatoria para elegir el número ganador.
+-- ===============================================================================
+-- SUB-MÓDULO 8.1: BASE DE TIEMPOS
+-- ===============================================================================
 entity juego_timebase is
     Port ( 
-        clk            : in STD_LOGIC; -- Reloj base (100 MHz)
-        reset          : in STD_LOGIC;
-        clk_1hz_enable : out STD_LOGIC; -- Pulso de habilitación de 1Hz
-        refresh_cnt    : out integer    -- Contador rápido (semilla/refresco)
+        clk : in STD_LOGIC;
+        reset : in STD_LOGIC;
+        clk_1hz_enable : out STD_LOGIC;
+        refresh_cnt : out integer
     );
 end juego_timebase;
 
 architecture Behavioral of juego_timebase is
-    -- Constantes para divisor de frecuencia (100 MHz)
-    constant CLK_FREQ    : integer := 100_000_000;
-    constant MAX_REFRESH : integer := 200_000; -- Velocidad de refresco del display
-    
-    -- Señales internas
-    signal cnt_1s  : integer range 0 to CLK_FREQ := 0;
+    constant CLK_FREQ : integer := 100_000_000;
+    constant MAX_REFRESH : integer := 200_000;
+    signal cnt_1s : integer range 0 to CLK_FREQ := 0;
     signal cnt_ref : integer range 0 to MAX_REFRESH := 0;
 begin
     process(clk, reset)
     begin
         if reset = '1' then
-            cnt_1s <= 0; 
-            cnt_ref <= 0; 
-            clk_1hz_enable <= '0';
+            cnt_1s <= 0; cnt_ref <= 0; clk_1hz_enable <= '0';
         elsif rising_edge(clk) then
-            -- GENERADOR DE 1 HZ (Un pulso cada 100 millones de ciclos)
             if cnt_1s = CLK_FREQ - 1 then
-                cnt_1s <= 0; 
-                clk_1hz_enable <= '1'; -- Disparo
+                cnt_1s <= 0; clk_1hz_enable <= '1';
             else
-                cnt_1s <= cnt_1s + 1; 
-                clk_1hz_enable <= '0';
+                cnt_1s <= cnt_1s + 1; clk_1hz_enable <= '0';
             end if;
-            
-            -- GENERADOR DE REFRESCO (Contador rápido cíclico)
-            if cnt_ref = MAX_REFRESH then
-                cnt_ref <= 0;
-            else
-                cnt_ref <= cnt_ref + 1;
-            end if;
+            if cnt_ref = MAX_REFRESH then cnt_ref <= 0; else cnt_ref <= cnt_ref + 1; end if;
         end if;
     end process;
-    
     refresh_cnt <= cnt_ref;
 end Behavioral;
+
 -- ===============================================================================
--- MÓDULO 9: NÚCLEO LÓGICO (Cerebro del Juego - FSM)
+-- SUB-MÓDULO 8.2: NÚCLEO LÓGICO (FSM - Lógica del Juego)
 -- ===============================================================================
+-- DESCRIPCIÓN:
+-- Cerebro del juego.
+-- CAMBIO: El estado 'init' ahora muestra "----" y espera el primer botón
+-- para capturar el random y validar inmediatamente el primer intento.
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- DESCRIPCIÓN:
--- Controla toda la lógica del juego de adivinanza (0-15).
--- Gestiona los estados: Espera, Validar, Pista (Sube/Baja), Ganar (OH) y Perder (FAIL).
--- También maneja el contador de vidas (5 intentos) y captura el número aleatorio.
 entity juego_fsm_core is
     Port (
-        clk, reset    : in std_logic;
-        btn_validar   : in std_logic; -- Botón central (ya limpio de rebotes)
-        sw_in         : in std_logic_vector(3 downto 0); -- Número ingresado por usuario
-        clk_1hz_en    : in std_logic; -- Pulso de 1 seg para el castigo
-        refresh_val   : in integer;   -- Valor rápido para usar como número aleatorio
+        clk, reset : in std_logic;
+        btn_validar : in std_logic;
+        sw_in : in std_logic_vector(3 downto 0);
+        clk_1hz_en : in std_logic;
+        refresh_val : in integer;   
         
-        -- Salidas hacia LEDs y Display
-        leds_out      : out std_logic_vector(15 downto 0);
-        state_code    : out std_logic_vector(2 downto 0); -- Código para decirle al display qué mostrar
-        countdown_val : out integer range 0 to 15 -- Valor de la cuenta regresiva de castigo
+        leds_out : out std_logic_vector(15 downto 0);
+        state_code : out std_logic_vector(2 downto 0); 
+        countdown_val : out integer range 0 to 15
     );
 end juego_fsm_core;
 
 architecture Behavioral of juego_fsm_core is
-    -- Definición de estados de la FSM
     type state_type is (init, espera_ingreso, validar, oh_st, sube_st, baja_st, mostrar_fail, bloqueo_timer);
     signal state : state_type := init;
     
-    -- Registros del juego
     signal numero_adivinar, intento : std_logic_vector(3 downto 0) := "0000";
-    signal intentos_count : integer range 0 to 5 := 5; -- 5 Vidas
-    signal cuenta_reg     : integer range 0 to 15 := 15; -- Tiempo de castigo
-    
-    -- Temporizador para mensajes cortos (Sube, Baja, Win)
+    signal intentos_count : integer range 0 to 5 := 5;
+    signal cuenta_reg : integer range 0 to 15 := 15;
     signal msg_timer : integer range 0 to 300_000_000 := 0;
     
-    -- Detector de flanco para el botón
     signal btn_prev : std_logic := '0';
     signal btn_posedge : std_logic;
-    
-    -- Señales internas de salida
     signal leds_int : std_logic_vector(15 downto 0);
     signal st_code_int : std_logic_vector(2 downto 0);
 begin
-    -- Detector de flanco de subida del botón
+    -- Detector de flanco
     process(clk) begin if rising_edge(clk) then btn_prev <= btn_validar; end if; end process;
     btn_posedge <= btn_validar and (not btn_prev);
 
@@ -827,21 +802,39 @@ begin
             state <= init; intentos_count <= 5; cuenta_reg <= 15;
             numero_adivinar <= "0000"; msg_timer <= 0;
         elsif rising_edge(clk) then
-            -- Por defecto leds apagados, salvo eco de switches
             leds_int <= (others => '0');
-            leds_int(3 downto 0) <= sw_in; 
+            leds_int(3 downto 0) <= sw_in; -- El Eco de LEDs siempre funciona (para ver qué escribes)
 
             case state is
-                -- ESTADO 0: INICIALIZACIÓN
-                when init =>
+                -- ============================================================
+                -- ESTADO 0: INICIO / ESPERA CON GUIONES
+                -- ============================================================
+                when init => 
                     intentos_count <= 5; 
-                    state <= espera_ingreso;
+                    st_code_int <= "110"; -- CÓDIGO 6: Mostrar "----"
                     
-                -- ESTADO 1: ESPERANDO JUGADOR
+                    -- Mostrar Barra de Vidas completa (para que sepa que tiene 5)
+                    leds_int(11 downto 7) <= "11111";
+
+                    -- Esperar AQUÍ hasta que presione el botón por primera vez
+                    if btn_posedge = '1' then
+                        -- 1. Capturar lo que tiene en los switches como su primer intento
+                        intento <= sw_in;
+                        
+                        -- 2. Generar el número aleatorio en este instante exacto
+                        numero_adivinar <= std_logic_vector(to_unsigned(refresh_val mod 16, 4));
+                        
+                        -- 3. Ir directo a validar (saltarse la espera numérica)
+                        state <= validar;
+                    end if;
+                    
+                -- ============================================================
+                -- ESTADO 1: ESPERANDO SIGUIENTES INTENTOS (Ya muestra números)
+                -- ============================================================
                 when espera_ingreso =>
-                    st_code_int <= "000"; -- Código 0: Mostrar lo que dicen los switches
+                    st_code_int <= "000"; -- CÓDIGO 0: Muestra el número (Eco visual)
                     
-                    -- Mostrar Barra de Vidas (LEDs 11 al 7)
+                    -- Barra de vidas
                     if intentos_count >= 1 then leds_int(7) <= '1'; end if;
                     if intentos_count >= 2 then leds_int(8) <= '1'; end if;
                     if intentos_count >= 3 then leds_int(9) <= '1'; end if;
@@ -850,47 +843,26 @@ begin
                     
                     if btn_posedge = '1' then
                         intento <= sw_in;
-                        -- Si es el primer intento (5 vidas), capturamos la semilla aleatoria
-                        if intentos_count = 5 then
-                            numero_adivinar <= std_logic_vector(to_unsigned(refresh_val mod 16, 4));
-                        end if;
+                        -- Nota: El número aleatorio YA se generó en el estado 'init', no se cambia aquí
                         state <= validar;
                     end if;
                     
-                -- ESTADO 2: VALIDACIÓN (Comparar números)
+                -- ============================================================
+                -- ESTADO 2: VALIDACIÓN
+                -- ============================================================
                 when validar =>
                     st_code_int <= "000";
                     if intento = numero_adivinar then
-                        msg_timer <= 0; state <= oh_st; -- ¡Ganó!
+                        msg_timer <= 0; state <= oh_st;
                     else
-                        -- Falló: Restar vida y decidir pista
                         if intentos_count > 0 then intentos_count <= intentos_count - 1; end if;
                         msg_timer <= 0;
                         if unsigned(intento) < unsigned(numero_adivinar) then state <= sube_st;
                         else state <= baja_st; end if;
                     end if;
                     
-                -- ESTADO 3: PISTA "SUBE"
-                when sube_st =>
-                    st_code_int <= "001"; -- ID 1: Mostrar "SUBE" en display
-                    -- Mantener vidas visibles
-                    if intentos_count >= 1 then leds_int(7) <= '1'; end if;
-                    if intentos_count >= 2 then leds_int(8) <= '1'; end if;
-                    if intentos_count >= 3 then leds_int(9) <= '1'; end if;
-                    if intentos_count >= 4 then leds_int(10) <= '1'; end if;
-                    if intentos_count = 5  then leds_int(11) <= '1'; end if;
-
-                    -- Mostrar mensaje por 2 segundos
-                    if msg_timer < 200_000_000 then msg_timer <= msg_timer + 1;
-                    else
-                        msg_timer <= 0;
-                        if intentos_count = 0 then state <= mostrar_fail; -- Game Over
-                        else state <= espera_ingreso; end if;
-                    end if;
-
-                -- ESTADO 4: PISTA "BAJA" (Misma lógica que SUBE)
-                when baja_st =>
-                    st_code_int <= "010"; -- ID 2: Mostrar "bAJA"
+                when sube_st => 
+                    st_code_int <= "001";
                     if intentos_count >= 1 then leds_int(7) <= '1'; end if;
                     if intentos_count >= 2 then leds_int(8) <= '1'; end if;
                     if intentos_count >= 3 then leds_int(9) <= '1'; end if;
@@ -904,67 +876,63 @@ begin
                         else state <= espera_ingreso; end if;
                     end if;
 
-                -- ESTADO 5: VICTORIA ("OH")
-                when oh_st =>
-                    st_code_int <= "011"; -- ID 3: Mostrar "OH"
-                    leds_int <= (others => '1'); -- Fiesta de LEDs
-                    if msg_timer < 200_000_000 then msg_timer <= msg_timer + 1;
-                    else state <= init; end if; -- Reinicia juego
+                when baja_st => 
+                    st_code_int <= "010";
+                    if intentos_count >= 1 then leds_int(7) <= '1'; end if;
+                    if intentos_count >= 2 then leds_int(8) <= '1'; end if;
+                    if intentos_count >= 3 then leds_int(9) <= '1'; end if;
+                    if intentos_count >= 4 then leds_int(10) <= '1'; end if;
+                    if intentos_count = 5  then leds_int(11) <= '1'; end if;
 
-                -- ESTADO 6: DERROTA ("FAIL")
-                when mostrar_fail =>
-                    st_code_int <= "100"; -- ID 4: Mostrar "FAIL"
-                    leds_int(13) <= '1';  -- LED indicador de error
+                    if msg_timer < 200_000_000 then msg_timer <= msg_timer + 1;
+                    else
+                        msg_timer <= 0;
+                        if intentos_count = 0 then state <= mostrar_fail;
+                        else state <= espera_ingreso; end if;
+                    end if;
+
+                when oh_st => 
+                    st_code_int <= "011";
+                    leds_int <= (others => '1'); 
+                    if msg_timer < 200_000_000 then msg_timer <= msg_timer + 1;
+                    else state <= init; end if; -- Al ganar, vuelve a INIT (----)
+
+                when mostrar_fail => 
+                    st_code_int <= "100"; leds_int(13) <= '1';
                     if msg_timer < 200_000_000 then
                         msg_timer <= msg_timer + 1; cuenta_reg <= 15;
                     else
                         msg_timer <= 0; state <= bloqueo_timer;
                     end if;
 
-                -- ESTADO 7: BLOQUEO/CASTIGO
-                when bloqueo_timer =>
-                    st_code_int <= "101"; -- ID 5: Mostrar Cuenta Regresiva
-                    leds_int(14) <= '1';  -- LED indicador de bloqueo
+                when bloqueo_timer => 
+                    st_code_int <= "101"; leds_int(14) <= '1';
                     if clk_1hz_en = '1' then
                         if cuenta_reg > 0 then cuenta_reg <= cuenta_reg - 1;
-                        else state <= init; end if; -- Reinicia al terminar castigo
+                        else state <= init; end if; -- Al terminar bloqueo, vuelve a INIT (----)
                     end if;
             end case;
         end if;
     end process;
-    
-    leds_out <= leds_int;
-    state_code <= st_code_int;
-    countdown_val <= cuenta_reg;
+    leds_out <= leds_int; state_code <= st_code_int; countdown_val <= cuenta_reg;
 end Behavioral;
 
 -- ===============================================================================
--- MÓDULO 10: CONTROLADOR DE DISPLAY (Visualización)
+-- SUB-MÓDULO 8.3: CONTROLADOR DE DISPLAY
 -- ===============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- DESCRIPCIÓN:
--- Recibe un 'state_code' y muestra el mensaje correspondiente en los displays.
--- Códigos:
--- 000: Muestra valor de switches (Binario a Decimal 0/1 en 4 displays)
--- 001: "SUBE"
--- 010: "bAJA"
--- 011: "OH" (Victoria)
--- 100: "FAIL"
--- 101: Cuenta regresiva (00 a 15)
 entity juego_display_driver is
     Port (
-        clk           : in std_logic;
-        reset         : in std_logic;
-        refresh_cnt   : in integer; -- Contador rápido para multiplexar
-        state_code    : in std_logic_vector(2 downto 0); -- Comando de qué mostrar
-        sw_in         : in std_logic_vector(3 downto 0); -- Dato crudo switches
-        countdown_val : in integer; -- Dato numérico del temporizador
-        
+        clk, reset : in std_logic;
+        refresh_cnt : in integer;
+        state_code : in std_logic_vector(2 downto 0);
+        sw_in : in std_logic_vector(3 downto 0);
+        countdown_val : in integer;
         seg : out std_logic_vector(6 downto 0);
-        an  : out std_logic_vector(3 downto 0)
+        an : out std_logic_vector(3 downto 0)
     );
 end juego_display_driver;
 
@@ -973,7 +941,6 @@ architecture Behavioral of juego_display_driver is
     signal data_char : std_logic_vector(4 downto 0);
     signal an_temp : std_logic_vector(3 downto 0);
     
-    -- Definición de constantes para caracteres personalizados
     constant CHAR_0: std_logic_vector(4 downto 0):="00000"; constant CHAR_1: std_logic_vector(4 downto 0):="00001";
     constant CHAR_A: std_logic_vector(4 downto 0):="01010"; constant CHAR_C: std_logic_vector(4 downto 0):="01100";
     constant CHAR_E: std_logic_vector(4 downto 0):="01110"; constant CHAR_F: std_logic_vector(4 downto 0):="01111";
@@ -981,18 +948,20 @@ architecture Behavioral of juego_display_driver is
     constant CHAR_b: std_logic_vector(4 downto 0):="10010"; constant CHAR_L: std_logic_vector(4 downto 0):="10011";
     constant CHAR_I: std_logic_vector(4 downto 0):="10100"; constant CHAR_H: std_logic_vector(4 downto 0):="10101";
     constant CHAR_O: std_logic_vector(4 downto 0):="10110"; constant CHAR_J: std_logic_vector(4 downto 0):="10111";
-    constant CHAR_OFF: std_logic_vector(4 downto 0):="11100";
+    constant CHAR_GUION: std_logic_vector(4 downto 0):="11111"; constant CHAR_OFF: std_logic_vector(4 downto 0):="11100";
 
-    -- Función decodificadora: Convierte ID de carácter a segmentos (gfedcba)
     function char_to_7seg(val: std_logic_vector(4 downto 0)) return STD_LOGIC_VECTOR is
     begin
         case val is
-            -- Números básicos
             when "00000" => return "0000001"; when "00001" => return "1001111";
-            -- ... (Espacio para num 2-9 si fuera necesario) ...
-            -- Letras para mensajes
+            when "00010" => return "0010010"; when "00011" => return "0000110";
+            when "00100" => return "1001100"; when "00101" => return "0100100";
+            when "00110" => return "0100000"; when "00111" => return "0001111";
+            when "01000" => return "0000000"; when "01001" => return "0000100";
             when "01010" => return "0001000"; -- A
             when "10010" => return "1100000"; -- b
+            when "01011" => return "1100000"; 
+            when "01100" => return "0110001"; -- C
             when "01110" => return "0110000"; -- E
             when "01111" => return "0111000"; -- F
             when "10000" => return "0100100"; -- S
@@ -1002,131 +971,83 @@ architecture Behavioral of juego_display_driver is
             when "10101" => return "1001000"; -- H
             when "10110" => return "0000001"; -- O
             when "10111" => return "1000011"; -- J
-            when others => return "1111111";  -- Apagado
+            when "11111" => return "1111110"; -- Guion (Solo G encendido)
+            when others => return "1111111"; 
         end case;
     end function;
-
 begin
-    -- Selección de ánodo basado en bits altos del contador de refresco
     an_selector <= std_logic_vector(to_unsigned((refresh_cnt / 50000) mod 4, 2));
 
     process(an_selector, state_code, sw_in, countdown_val)
     begin
         data_char <= CHAR_OFF; an_temp <= "1111";
-        
-        -- MÁQUINA DE ESTADO DE VISUALIZACIÓN
-        -- Dependiendo del ánodo activo y el 'state_code', elegimos qué letra mostrar.
         case an_selector is
-            when "00" => an_temp<="1110"; -- Dígito 0 (Derecha)
+            when "00" => an_temp<="1110"; -- D0
                 if state_code="001" then data_char <= CHAR_E;       -- SUB(E)
                 elsif state_code="010" then data_char <= CHAR_A;    -- BAJ(A)
                 elsif state_code="100" then data_char <= CHAR_L;    -- FAI(L)
                 elsif state_code="101" then data_char <= "0" & std_logic_vector(to_unsigned(countdown_val mod 10, 4));
-                elsif state_code="000" then 
-                    if sw_in(0)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if;
-                end if;
+                elsif state_code="110" then data_char <= CHAR_GUION; -- INICIO (-)
+                elsif state_code="000" then if sw_in(0)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if; end if;
                 
-            when "01" => an_temp<="1101"; -- Dígito 1
+            when "01" => an_temp<="1101"; -- D1
                 if state_code="001" then data_char <= CHAR_b;       -- SU(b)E
                 elsif state_code="010" then data_char <= CHAR_J;    -- BA(J)A
                 elsif state_code="100" then data_char <= CHAR_I;    -- FA(I)L
                 elsif state_code="101" then data_char <= "0" & std_logic_vector(to_unsigned(countdown_val / 10, 4));
-                elsif state_code="000" then 
-                    if sw_in(1)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if;
-                end if;
+                elsif state_code="110" then data_char <= CHAR_GUION; -- INICIO (-)
+                elsif state_code="000" then if sw_in(1)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if; end if;
                 
-            when "10" => an_temp<="1011"; -- Dígito 2
+            when "10" => an_temp<="1011"; -- D2
                 if state_code="001" then data_char <= CHAR_U;       -- S(U)BE
                 elsif state_code="010" then data_char <= CHAR_A;    -- B(A)JA
                 elsif state_code="100" then data_char <= CHAR_A;    -- F(A)IL
-                elsif state_code="000" then 
-                    if sw_in(2)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if;
-                end if;
+                elsif state_code="110" then data_char <= CHAR_GUION; -- INICIO (-)
+                elsif state_code="000" then if sw_in(2)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if; end if;
                 
-            when "11" => an_temp<="0111"; -- Dígito 3 (Izquierda)
+            when "11" => an_temp<="0111"; -- D3
                 if state_code="001" then data_char <= CHAR_S;       -- (S)UBE
                 elsif state_code="010" then data_char <= CHAR_b;    -- (b)AJA
                 elsif state_code="100" then data_char <= CHAR_F;    -- (F)AIL
-                elsif state_code="000" then 
-                    if sw_in(3)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if;
-                end if;
-                
+                elsif state_code="110" then data_char <= CHAR_GUION; -- INICIO (-)
+                elsif state_code="000" then if sw_in(3)='1' then data_char<=CHAR_1; else data_char<=CHAR_0; end if; end if;
             when others => an_temp<="1111";
         end case;
     end process;
-
-    -- Salida final a segmentos
-    -- Nota: Override especial para mostrar "OH" (usando segmentos crudos para la O y H)
+    
+    -- Override "OH"
     seg <= "1001000" when (state_code="011" and an_selector="00") else -- H
            "0000001" when (state_code="011" and an_selector="01") else -- O
-           "1111111" when (state_code="011") else -- Apagar los otros dos dígitos
+           "1111111" when (state_code="011") else 
            char_to_7seg(data_char);
-           
     an <= an_temp;
 end Behavioral;
 
 -- ===============================================================================
--- MÓDULO 11 (TOP): JUEGO ADIVINANZA (Integración)
+-- MÓDULO 8 (TOP): JUEGO ADIVINANZA (Estructural)
 -- ===============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 
--- DESCRIPCIÓN:
--- Módulo Top-Level del Juego de Adivinanza.
--- Interconecta:
--- 1. Base de Tiempos (Relojes)
--- 2. Núcleo Lógico (Reglas del juego)
--- 3. Controlador de Display (Interfaz visual)
 entity juego_adivinanza is
     Port (
-        clk          : in std_logic;
-        reset        : in std_logic;
-        BTNC_validar : in std_logic; -- Botón de acción
-        SW_in        : in std_logic_vector(3 downto 0); -- Switches de entrada
-        LED_out      : out std_logic_vector(15 downto 0); -- Feedback en LEDs
-        seg          : out std_logic_vector(6 downto 0);  -- Salida display
-        an           : out std_logic_vector(3 downto 0)   -- Selector display
+        clk, reset, BTNC_validar : in std_logic;
+        SW_in : in std_logic_vector(3 downto 0);
+        LED_out : out std_logic_vector(15 downto 0);
+        seg : out std_logic_vector(6 downto 0);
+        an : out std_logic_vector(3 downto 0)
     );
 end juego_adivinanza;
 
 architecture Structural of juego_adivinanza is
-    -- Señales internas (Cables)
-    signal s_clk_1hz    : std_logic;
-    signal s_refresh    : integer;
+    signal s_clk_1hz : std_logic;
+    signal s_refresh : integer;
     signal s_state_code : std_logic_vector(2 downto 0);
-    signal s_countdown  : integer;
-    
+    signal s_countdown : integer;
 begin
-    -- INSTANCIA 1: BASE DE TIEMPO
-    -- Genera los pulsos de reloj necesarios para lógica y visualización
-    U_TIME: entity work.juego_timebase port map (
-        clk => clk, reset => reset, 
-        clk_1hz_enable => s_clk_1hz, refresh_cnt => s_refresh
-    );
-
-    -- INSTANCIA 2: NÚCLEO DEL JUEGO
-    -- Recibe las entradas, procesa reglas y define estados
-    U_CORE: entity work.juego_fsm_core port map (
-        clk => clk, reset => reset, 
-        btn_validar => BTNC_validar, 
-        sw_in => SW_in, 
-        clk_1hz_en => s_clk_1hz, refresh_val => s_refresh,
-        leds_out => LED_out, 
-        state_code => s_state_code, 
-        countdown_val => s_countdown
-    );
-
-    -- INSTANCIA 3: CONTROL DE PANTALLA
-    -- Traduce el estado interno a mensajes en el display
-    U_DISP: entity work.juego_display_driver port map (
-        clk => clk, reset => reset,
-        refresh_cnt => s_refresh,
-        state_code => s_state_code,
-        sw_in => SW_in,
-        countdown_val => s_countdown,
-        seg => seg, an => an
-    );
-
+    U_TIME: entity work.juego_timebase port map ( clk => clk, reset => reset, clk_1hz_enable => s_clk_1hz, refresh_cnt => s_refresh );
+    U_CORE: entity work.juego_fsm_core port map ( clk => clk, reset => reset, btn_validar => BTNC_validar, sw_in => SW_in, clk_1hz_en => s_clk_1hz, refresh_val => s_refresh, leds_out => LED_out, state_code => s_state_code, countdown_val => s_countdown );
+    U_DISP: entity work.juego_display_driver port map ( clk => clk, reset => reset, refresh_cnt => s_refresh, state_code => s_state_code, sw_in => SW_in, countdown_val => s_countdown, seg => seg, an => an );
 end Structural;
 
 -- ===============================================================================
